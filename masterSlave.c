@@ -1,77 +1,82 @@
-#include <mpi.h>
 #include <stdio.h>
-#include <stdlib.h>
+#include <mpi.h>
 #include <time.h>
+#include <stdlib.h>
 
-#define MASTER 0
-#define TAG_DATA 1
-#define TAG_RESULT 2
-
-int main(int argc, char** argv) {
-    int world_rank, world_size;
-
+int main(int argc, char **argv)
+{
     MPI_Init(NULL, NULL);
-    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
+    int world_size;
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
 
-    if (world_size < 2) {
-        fprintf(stderr, "Número de processos deve ser pelo menos 2.\n");
-        MPI_Abort(MPI_COMM_WORLD, 1);
-    }
+    int world_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
-    if (world_rank == MASTER) {
-        // Mestre gera um número aleatório entre 1000 e 2000
+    const int M = 5 * world_size;
+    float *numbers = NULL;
+    float result_sum = 0.0;
+    int random_amount;
+
+    if (world_rank == 0)
+    {
         srand(time(NULL));
-        int total_numbers = 1000 + rand() % 1001; // Total de números entre 1000 e 2000
 
-        // Aloca memória para os números
-        int* numbers = (int*)malloc(sizeof(int) * total_numbers);
-        for (int i = 0; i < total_numbers; i++) {
-            numbers[i] = rand() % 100; // Gera números entre 0 e 99
+        for (int j = 1; j < world_size; j++)
+        {
+            random_amount = 1000 + rand() % 1001; // Random number between 1000 and 2000
+
+            numbers = (float *)malloc(random_amount * sizeof(float));
+            for (int i = 0; i < random_amount; i++)
+            {
+                numbers[i] = (float)rand() / RAND_MAX * 100.0;
+            }
+
+            MPI_Send(&random_amount, 1, MPI_INT, j, 0, MPI_COMM_WORLD);
+            MPI_Send(numbers, random_amount, MPI_FLOAT, j, 0, MPI_COMM_WORLD);
+
+            free(numbers);
         }
 
-        // Calcula quantos números cada escravo deve receber
-        int numbers_per_slave = total_numbers / (world_size - 1);
-        int remainder = total_numbers % (world_size - 1);
-
-        int offset = 0;
-        for (int i = 1; i < world_size; i++) {
-            int count = numbers_per_slave + (i <= remainder ? 1 : 0);
-            MPI_Send(numbers + offset, count, MPI_INT, i, TAG_DATA, MPI_COMM_WORLD);
-            offset += count;
+        // Collect results from worker processes
+        for (int i = 1; i < world_size; i++)
+        {
+            float value;
+            MPI_Recv(&value, 1, MPI_FLOAT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            result_sum += value;
+            printf("Received %f from process %d\n", value, i);
         }
 
-        // Recebe resultados dos escravos
-        int total_sum = 0;
-        for (int i = 1; i < world_size; i++) {
-            int slave_sum;
-            MPI_Recv(&slave_sum, 1, MPI_INT, i, TAG_RESULT, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            total_sum += slave_sum;
-        }
-
-        printf("A soma total dos números é %d\n", total_sum);
-        free(numbers);
-    } else {
-        // Escravo recebe números e calcula a soma
+        printf("Total sum of slaves: %f\n", result_sum);
+    }
+    else
+    {
+        // Worker processes
         MPI_Status status;
         int count;
-        MPI_Probe(MASTER, TAG_DATA, MPI_COMM_WORLD, &status);
+
+        MPI_Probe(0, 0, MPI_COMM_WORLD, &status);
         MPI_Get_count(&status, MPI_INT, &count);
 
-        int* numbers = (int*)malloc(sizeof(int) * count);
-        MPI_Recv(numbers, count, MPI_INT, MASTER, TAG_DATA, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&random_amount, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        numbers = (float *)malloc(random_amount * sizeof(float));
+        MPI_Recv(numbers, random_amount, MPI_FLOAT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-        int sum = 0;
-        for (int i = 0; i < count; i++) {
-            sum += numbers[i];
+        // Compute the local sum
+        float local_sum = 0.0;
+        for (int i = 0; i < random_amount; i++)
+        {
+            local_sum += numbers[i];
         }
 
-        // Envia o resultado de volta ao mestre
-        MPI_Send(&sum, 1, MPI_INT, MASTER, TAG_RESULT, MPI_COMM_WORLD);
+        // Send the result sum back to the master
+        MPI_Send(&local_sum, 1, MPI_FLOAT, 0, 0, MPI_COMM_WORLD);
+
+        printf("Process %d sent sum %f to the master\n", world_rank, local_sum);
+
         free(numbers);
     }
 
     MPI_Finalize();
     return 0;
 }
-
